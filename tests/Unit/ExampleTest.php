@@ -1,16 +1,21 @@
 <?php
 
-namespace Tests\Unit;
+namespace Tests\Feature;
 
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 
 class ExampleTest extends TestCase
 {
-    /**
-     * A basic test example.
-     */
-    public function test_that_true_is_true(): void
+    use RefreshDatabase; // 👈 esto crea las tablas (migraciones) antes de cada test
+
+    public function test_the_application_returns_a_successful_response(): void
     {
-        $this->assertTrue(true);
+        // Opcional: correr migraciones explícitamente si no quieres usar el trait
+        // $this->artisan('migrate');
+
+        $response = $this->get('/');
+
+        $response->assertStatus(200);
     }
 }
