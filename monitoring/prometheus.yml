@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'laravel_app'
+    metrics_path: /metrics
+    static_configs:
+      # Si tu app corre fuera de Docker en el puerto 8000 en la misma máquina
+      - targets: ['host.docker.internal:8000']
