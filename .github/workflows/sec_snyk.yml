@@ -5,7 +5,7 @@ on:
   push:
     branches: [ main ]
   schedule:
-    - cron: "0 6 * * 1" # escaneo semanal (lunes 06:00 UTC)
+    - cron: "0 6 * * 1"
 
 jobs:
   snyk:
@@ -27,38 +27,74 @@ jobs:
       - name: Install deps
         run: composer install --no-interaction --prefer-dist
 
-      - name: Setup Snyk
+      - name: Setup Snyk CLI
         uses: snyk/actions/setup@master
 
-      # ---------- Dependencias (OSS) ----------
-      - name: Snyk Open Source (deps) + SARIF
+      - name: Snyk auth
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
-          # Escaneo estándar (no rompe el job aquí)
-          snyk test --all-projects --severity-threshold=high || true
-          # Genera SARIF para Code scanning
-          snyk test --all-projects --sarif-file-output=snyk-oss.sarif || true
-          # Enviar proyecto a Snyk para monitoreo continuo
-          snyk monitor --all-projects || true
+          if [ -z "$SNYK_TOKEN" ]; then
+            echo "SNYK_TOKEN is empty. Add it in GitHub → Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          snyk auth "$SNYK_TOKEN"
+          echo "Authenticated with Snyk CLI."
+
+      # ---------- Dependencias (Composer) ----------
+      - name: Snyk Open Source (Composer) + SARIF
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_ORG: ${{ secrets.SNYK_ORG }} # opcional
+        run: |
+          ORG_ARG=""
+          if [ -n "$SNYK_ORG" ]; then ORG_ARG="--org=$SNYK_ORG"; fi
+
+          # Test sólo contra composer.lock en la raíz (evita vendor/** y docs de dependencias)
+          snyk test \
+            --file=composer.lock \
+            --package-manager=composer \
+            --severity-threshold=high \
+            --prune-repeated-subdependencies \
+            --skip-unresolved \
+            $ORG_ARG || true
+
+          # Genera SARIF para GitHub Code Scanning
+          snyk test \
+            --file=composer.lock \
+            --package-manager=composer \
+            --sarif-file-output=snyk-oss.sarif \
+            --prune-repeated-subdependencies \
+            --skip-unresolved \
+            $ORG_ARG || true
+
+          # Monitoreo continuo en Snyk (histórico)
+          snyk monitor \
+            --file=composer.lock \
+            --package-manager=composer \
+            --prune-repeated-subdependencies \
+            $ORG_ARG || true
 
       # ---------- Código (SAST) ----------
       - name: Snyk Code (SAST) - genera SARIF si está habilitado
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_ORG: ${{ secrets.SNYK_ORG }}
         run: |
-          # Intentar generar SARIF (si Snyk Code no está habilitado, imprime error en stderr)
-          snyk code test --sarif 1> snyk-code.sarif 2> snyk-code.err || true
+          ORG_ARG=""
+          if [ -n "$SNYK_ORG" ]; then ORG_ARG="--org=$SNYK_ORG"; fi
 
-          # Validación simple para evitar subir texto de error como SARIF
+          snyk code test --sarif $ORG_ARG 1> snyk-code.sarif 2> snyk-code.err || true
+
+          # Validar que el archivo es JSON SARIF y no un mensaje de error
           if [ -s snyk-code.sarif ] && grep -q '"version"' snyk-code.sarif; then
             echo "Valid SARIF generated for Snyk Code."
           else
-            echo "No valid SARIF for Snyk Code (probably not enabled). Skipping upload."
+            echo "No valid SARIF for Snyk Code (probably not enabled or unauthorized). Skipping upload."
             rm -f snyk-code.sarif
           fi
 
-      # ---------- Subida de SARIF a GitHub Security ----------
+      # ---------- Subir SARIF ----------
       - name: Upload SARIF (Code)
         if: hashFiles('snyk-code.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
@@ -71,8 +107,12 @@ jobs:
         with:
           sarif_file: snyk-oss.sarif
 
-      # ---------- Política de ruptura (opcional pero recomendado) ----------
+      # ---------- Política de ruptura (opcional) ----------
       - name: Enforce High/Critical
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: snyk test --all-projects --severity-threshold=high
+          SNYK_ORG: ${{ secrets.SNYK_ORG }}
+        run: |
+          ORG_ARG=""
+          if [ -n "$SNYK_ORG" ]; then ORG_ARG="--org=$SNYK_ORG"; fi
+          snyk test --file=composer.lock --package-manager=composer --severity-threshold=high $ORG_ARG
