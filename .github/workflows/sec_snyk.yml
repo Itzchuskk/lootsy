@@ -1,0 +1,71 @@
+name: Security - Snyk
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  snyk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          tools: composer
+
+      - name: Install deps
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Setup Snyk
+        uses: snyk/actions/setup@master
+
+      # --- Dependencias (OSS) ---
+      - name: Snyk Open Source (deps) + SARIF
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          # Escaneo normal
+          snyk test --all-projects --severity-threshold=high || true
+          # SARIF para GitHub Security
+          snyk test --all-projects --sarif-file-output=snyk-oss.sarif || true
+          # Monitoreo de proyectos en Snyk (histórico)
+          snyk monitor --all-projects || true
+
+      # --- Código (SAST) ---
+      - name: Snyk Code (SAST) + SARIF
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          # Si Snyk Code no está habilitado, este comando falla; dejamos continuar
+          snyk code test --severity-threshold=high || true
+          snyk code test --sarif > snyk-code.sarif || true
+
+      # --- Subir SARIF a GitHub Security ---
+      - name: Upload SARIF (Code)
+        if: hashFiles('snyk-code.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: snyk-code.sarif
+
+      - name: Upload SARIF (OSS)
+        if: hashFiles('snyk-oss.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: snyk-oss.sarif
+
+      # --- Opcional: romper el build si hay High/Critical ---
+      - name: Enforce High/Critical
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: snyk test --all-projects --severity-threshold=high
