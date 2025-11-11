@@ -5,7 +5,7 @@ on:
   push:
     branches: [ main ]
   schedule:
-    - cron: "0 6 * * 1"
+    - cron: "0 6 * * 1" # escaneo semanal (lunes 06:00 UTC)
 
 jobs:
   snyk:
@@ -30,28 +30,35 @@ jobs:
       - name: Setup Snyk
         uses: snyk/actions/setup@master
 
-      # --- Dependencias (OSS) ---
+      # ---------- Dependencias (OSS) ----------
       - name: Snyk Open Source (deps) + SARIF
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
-          # Escaneo normal
+          # Escaneo estándar (no rompe el job aquí)
           snyk test --all-projects --severity-threshold=high || true
-          # SARIF para GitHub Security
+          # Genera SARIF para Code scanning
           snyk test --all-projects --sarif-file-output=snyk-oss.sarif || true
-          # Monitoreo de proyectos en Snyk (histórico)
+          # Enviar proyecto a Snyk para monitoreo continuo
           snyk monitor --all-projects || true
 
-      # --- Código (SAST) ---
-      - name: Snyk Code (SAST) + SARIF
+      # ---------- Código (SAST) ----------
+      - name: Snyk Code (SAST) - genera SARIF si está habilitado
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
-          # Si Snyk Code no está habilitado, este comando falla; dejamos continuar
-          snyk code test --severity-threshold=high || true
-          snyk code test --sarif > snyk-code.sarif || true
+          # Intentar generar SARIF (si Snyk Code no está habilitado, imprime error en stderr)
+          snyk code test --sarif 1> snyk-code.sarif 2> snyk-code.err || true
 
-      # --- Subir SARIF a GitHub Security ---
+          # Validación simple para evitar subir texto de error como SARIF
+          if [ -s snyk-code.sarif ] && grep -q '"version"' snyk-code.sarif; then
+            echo "Valid SARIF generated for Snyk Code."
+          else
+            echo "No valid SARIF for Snyk Code (probably not enabled). Skipping upload."
+            rm -f snyk-code.sarif
+          fi
+
+      # ---------- Subida de SARIF a GitHub Security ----------
       - name: Upload SARIF (Code)
         if: hashFiles('snyk-code.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
@@ -64,7 +71,7 @@ jobs:
         with:
           sarif_file: snyk-oss.sarif
 
-      # --- Opcional: romper el build si hay High/Critical ---
+      # ---------- Política de ruptura (opcional pero recomendado) ----------
       - name: Enforce High/Critical
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
