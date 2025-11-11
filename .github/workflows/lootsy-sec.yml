@@ -32,7 +32,6 @@ jobs:
         run: composer audit --locked || true
 
       # --- TRIVY (FS scan → SARIF) ---
-      # IMPORTANTE: solo UNA invocación al action, con scan-type=fs
       - name: Trivy FS scan → SARIF
         uses: aquasecurity/trivy-action@master
         with:
@@ -79,23 +78,30 @@ jobs:
         with:
           sarif_file: semgrep.sarif
 
-      # --- GITLEAKS (secret scanning extra) ---
-      - name: Install Gitleaks
-        run: |
-          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_$(uname -s | tr '[:upper:]' '[:lower:]')_x64.tar.gz \
-          | tar -xz gitleaks
-          sudo mv gitleaks /usr/local/bin/gitleaks
-
+      # --- GITLEAKS (secret scanning) usando Action ---
       - name: Gitleaks scan → SARIF
-        run: |
-          gitleaks detect --no-git \
-            --report-format sarif \
-            --report-path gitleaks.sarif \
-            --exclude-forks \
-            || true
+        uses: zricethezav/gitleaks-action@v2
+        with:
+          args: detect --no-git --report-format sarif --report-path gitleaks.sarif --redact
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload SARIF (Gitleaks)
         if: hashFiles('gitleaks.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: gitleaks.sarif
+
+      # --- Romper el build si hay CRITICAL/HIGH en Trivy ---
+      # - name: Enforce High/Critical (Trivy)
+      #   uses: aquasecurity/trivy-action@master
+      #   with:
+      #     scan-type: 'fs'
+      #     scan-ref: '.'
+      #     severity: 'CRITICAL,HIGH'
+      #     ignore-unfixed: true
+      #     hide-progress: true
+      #     vuln-type: 'os,library'
+      #     scanners: 'vuln'
+      #     exit-code: '1'
+      #     skip-dirs: 'vendor,node_modules,storage,public,bootstrap/cache'
