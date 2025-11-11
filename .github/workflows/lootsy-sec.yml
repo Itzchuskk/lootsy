@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # --- PHP deps (opcional para consistencia) ---
+      # --- PHP deps (opcional) ---
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
@@ -31,21 +31,22 @@ jobs:
       - name: Composer audit (no-fail)
         run: composer audit --locked || true
 
-      # --- TRIVY (Vulns + SBOM/secrets básicos) ---
-      - name: Install Trivy
-        uses: aquasecurity/trivy-action@master
-
+      # --- TRIVY (FS scan → SARIF) ---
+      # IMPORTANTE: solo UNA invocación al action, con scan-type=fs
       - name: Trivy FS scan → SARIF
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
+          scan-ref: '.'
           format: 'sarif'
           output: 'trivy.sarif'
           severity: 'CRITICAL,HIGH'
           ignore-unfixed: true
           hide-progress: true
+          vuln-type: 'os,library'
+          scanners: 'vuln,secret,misconfig,license'
           skip-dirs: 'vendor,node_modules,storage,public,bootstrap/cache'
-          scanners: 'vuln,secret,misconfig,license' # incluye lockfiles como composer.lock
+          exit-code: '0'   # no romper el build aquí
 
       - name: Upload SARIF (Trivy)
         if: hashFiles('trivy.sarif') != ''
@@ -53,7 +54,7 @@ jobs:
         with:
           sarif_file: trivy.sarif
 
-      # --- SEMGREP (SAST PHP/Laravel con reglas públicas) ---
+      # --- SEMGREP (SAST PHP/Laravel) ---
       - name: Install Semgrep
         run: |
           python3 -m pip install --upgrade pip
@@ -62,7 +63,6 @@ jobs:
       - name: Semgrep scan → SARIF
         run: |
           semgrep --version
-          # Reglas enfocadas en seguridad PHP + OWASP + secrets
           semgrep \
             --config p/php \
             --config p/owasp-top-ten \
@@ -79,7 +79,7 @@ jobs:
         with:
           sarif_file: semgrep.sarif
 
-      # --- GITLEAKS (secret scanning adicional) ---
+      # --- GITLEAKS (secret scanning extra) ---
       - name: Install Gitleaks
         run: |
           curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_$(uname -s | tr '[:upper:]' '[:lower:]')_x64.tar.gz \
