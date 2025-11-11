@@ -1,0 +1,106 @@
+name: Security - OSS Stack (Trivy + Semgrep + Gitleaks)
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: "0 6 * * 1" # semanal (lunes 06:00 UTC)
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # necesario para Gitleaks en PRs
+
+      # ---------- Composer (opcional, coherencia de deps) ----------
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          tools: composer
+
+      - name: Install Composer deps
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Composer audit (no-fail)
+        run: composer audit --locked || true
+
+      # ---------- TRIVY (FS scan → SARIF) ----------
+      - name: Trivy FS scan → SARIF
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          hide-progress: true
+          vuln-type: os,library
+          scanners: vuln,secret,misconfig,license
+          skip-dirs: vendor,node_modules,storage,public,bootstrap/cache
+          exit-code: '0'  # no romper aquí
+
+      - name: Upload SARIF (Trivy)
+        if: hashFiles('trivy.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+
+      # ---------- SEMGREP (SAST PHP/Laravel) ----------
+      - name: Install Semgrep
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install semgrep
+
+      - name: Semgrep scan → SARIF
+        run: |
+          semgrep --version
+          semgrep \
+            --config p/php \
+            --config p/owasp-top-ten \
+            --config p/secrets \
+            --error \
+            --skip-unknown-extensions \
+            --exclude vendor --exclude node_modules --exclude storage --exclude public --exclude bootstrap/cache \
+            --sarif -o semgrep.sarif || true
+
+      - name: Upload SARIF (Semgrep)
+        if: hashFiles('semgrep.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+
+      # ---------- GITLEAKS (secret scanning) ----------
+      - name: Gitleaks scan → SARIF
+        uses: zricethezav/gitleaks-action@v2
+        continue-on-error: true  # no corta el job si encuentra leaks
+
+      - name: Upload SARIF (Gitleaks)
+        if: hashFiles('results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+
+      # ---------- (Opcional) Bloquear merges por severidad con Trivy ----------
+      # - name: Enforce High/Critical (Trivy)
+      #   uses: aquasecurity/trivy-action@master
+      #   with:
+      #     scan-type: fs
+      #     scan-ref: .
+      #     severity: CRITICAL,HIGH
+      #     ignore-unfixed: true
+      #     hide-progress: true
+      #     vuln-type: os,library
+      #     scanners: vuln
+      #     exit-code: '1'
+      #     skip-dirs: vendor,node_modules,storage,public,bootstrap/cache
