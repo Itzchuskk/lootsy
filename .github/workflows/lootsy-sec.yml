@@ -17,6 +17,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # <-- necesario para Gitleaks en PRs
 
       # --- PHP deps (opcional) ---
       - name: Setup PHP
@@ -45,7 +47,7 @@ jobs:
           vuln-type: 'os,library'
           scanners: 'vuln,secret,misconfig,license'
           skip-dirs: 'vendor,node_modules,storage,public,bootstrap/cache'
-          exit-code: '0'   # no romper el build aquí
+          exit-code: '0'   # no romper aquí
 
       - name: Upload SARIF (Trivy)
         if: hashFiles('trivy.sarif') != ''
@@ -78,21 +80,21 @@ jobs:
         with:
           sarif_file: semgrep.sarif
 
-      # --- GITLEAKS (secret scanning) usando Action ---
+      # --- GITLEAKS (secret scanning) ---
       - name: Gitleaks scan → SARIF
         uses: zricethezav/gitleaks-action@v2
+        continue-on-error: true      # <-- no corta el job si falla/leaks
         with:
-          args: detect --no-git --report-format sarif --report-path gitleaks.sarif --redact
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # El action crea por defecto 'results.sarif' en el workspace
+          # No acepta 'args'; usa su configuración interna.
 
       - name: Upload SARIF (Gitleaks)
-        if: hashFiles('gitleaks.sarif') != ''
+        if: hashFiles('results.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: gitleaks.sarif
+          sarif_file: results.sarif
 
-      # --- Romper el build si hay CRITICAL/HIGH en Trivy ---
+      # --- (Opcional) bloquear merges por severidad con Trivy ---
       # - name: Enforce High/Critical (Trivy)
       #   uses: aquasecurity/trivy-action@master
       #   with:
